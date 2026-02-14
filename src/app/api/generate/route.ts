@@ -13,9 +13,14 @@ export async function POST(request: Request) {
 
     const formData = await request.formData();
     const imageData = formData.get("image") as string | null;
+    const email = formData.get("email") as string | null;
 
     if (!imageData) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
+    }
+
+    if (!email) {
+      return NextResponse.json({ error: "Email is required" }, { status: 400 });
     }
 
     const createRes = await fetch(`${MESHY_BASE}/image-to-3d`, {

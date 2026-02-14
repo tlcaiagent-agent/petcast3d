@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 
-type Stage = "upload" | "crop" | "generating" | "preview";
+type Stage = "upload" | "crop" | "submitted" | "preview";
 
 interface PhotoScore {
   score: number;
@@ -11,20 +11,10 @@ interface PhotoScore {
   tips: string[];
 }
 
-const FUN_MESSAGES = [
-  "Sculpting your pet... 🎨",
-  "Measuring those adorable ears... 📏",
-  "Adding the finishing touches... ✨",
-  "Buffing to a perfect shine... 💎",
-  "Almost there, just fluffing the fur... 🐕",
-  "Teaching the clay to sit... 🐾",
-  "Polishing the nose... 👃",
-];
-
 function analyzeImage(img: HTMLImageElement, file: File): Promise<PhotoScore> {
   return new Promise((resolve) => {
     const canvas = document.createElement("canvas");
-    const size = 100; // sample at low res for speed
+    const size = 100;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext("2d")!;
@@ -82,7 +72,6 @@ function CropTool({ imageUrl, onCrop, onCancel }: { imageUrl: string; onCrop: (d
       const cw = Math.round(img.width * s);
       const ch = Math.round(img.height * s);
       setCanvasSize({ w: cw, h: ch });
-      // Default crop: centered square
       const side = Math.min(cw, ch) * 0.8;
       setCropRect({ x: (cw - side) / 2, y: (ch - side) / 2, w: side, h: side });
       setImgLoaded(true);
@@ -95,21 +84,17 @@ function CropTool({ imageUrl, onCrop, onCancel }: { imageUrl: string; onCrop: (d
     const ctx = canvasRef.current.getContext("2d")!;
     ctx.clearRect(0, 0, canvasSize.w, canvasSize.h);
     ctx.drawImage(imgRef.current, 0, 0, canvasSize.w, canvasSize.h);
-    // Dim outside crop
     ctx.fillStyle = "rgba(0,0,0,0.5)";
     ctx.fillRect(0, 0, canvasSize.w, canvasSize.h);
-    // Clear crop area
     ctx.clearRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
     ctx.drawImage(
       imgRef.current,
       cropRect.x / scale, cropRect.y / scale, cropRect.w / scale, cropRect.h / scale,
       cropRect.x, cropRect.y, cropRect.w, cropRect.h
     );
-    // Border
     ctx.strokeStyle = "#f59e0b";
     ctx.lineWidth = 2;
     ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
-    // Corner handles
     const hs = 8;
     ctx.fillStyle = "#f59e0b";
     [[cropRect.x, cropRect.y], [cropRect.x + cropRect.w, cropRect.y], [cropRect.x, cropRect.y + cropRect.h], [cropRect.x + cropRect.w, cropRect.y + cropRect.h]].forEach(([cx, cy]) => {
@@ -151,7 +136,6 @@ function CropTool({ imageUrl, onCrop, onCancel }: { imageUrl: string; onCrop: (d
     const srcY = cropRect.y / scale;
     const srcW = cropRect.w / scale;
     const srcH = cropRect.h / scale;
-    // Output at original resolution (capped at 2048)
     const maxOut = 2048;
     const outScale = Math.min(1, maxOut / Math.max(srcW, srcH));
     out.width = Math.round(srcW * outScale);
@@ -161,7 +145,6 @@ function CropTool({ imageUrl, onCrop, onCancel }: { imageUrl: string; onCrop: (d
     onCrop(out.toDataURL("image/jpeg", 0.92));
   };
 
-  // Resize handles via buttons
   const adjustSize = (delta: number) => {
     setCropRect((r) => {
       const newW = Math.max(50, Math.min(canvasSize.w, r.w + delta));
@@ -209,12 +192,12 @@ export default function CreatePage() {
   const [croppedImage, setCroppedImage] = useState<string | null>(null);
   const [photoScore, setPhotoScore] = useState<PhotoScore | null>(null);
   const [scoring, setScoring] = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState(FUN_MESSAGES[0]);
-  const [progress, setProgress] = useState(0);
-  const [modelUrl, setModelUrl] = useState<string | null>(null);
-  const [regenerateCount, setRegenerateCount] = useState(0);
-  const [reuploadCount, setReuploadCount] = useState(0);
+  const [email, setEmail] = useState("");
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [submittedEmail, setSubmittedEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
 
   const handleFile = useCallback((file: File) => {
     setRawFile(file);
@@ -236,7 +219,6 @@ export default function CreatePage() {
     setCroppedImage(dataUrl);
     setStage("upload");
     setScoring(true);
-    // Score the cropped image
     const img = new Image();
     img.onload = async () => {
       if (rawFile) {
@@ -248,113 +230,95 @@ export default function CreatePage() {
     img.src = dataUrl;
   }, [rawFile]);
 
+  // Background polling + email notification
+  useEffect(() => {
+    if (!taskId || stage !== "submitted" || emailSent) return;
+    if (taskId === "demo") {
+      setEmailSent(true);
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/generate?taskId=${taskId}`);
+        const data = await res.json();
+        if (data.status === "SUCCEEDED" && data.modelUrl) {
+          clearInterval(interval);
+          // Send email notification
+          try {
+            await fetch("/api/notify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: submittedEmail,
+                taskId,
+                modelUrl: data.modelUrl,
+              }),
+            });
+          } catch { /* best effort */ }
+          setEmailSent(true);
+        }
+        if (data.status === "FAILED") {
+          clearInterval(interval);
+        }
+      } catch { /* network blip, keep polling */ }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [taskId, stage, submittedEmail, emailSent]);
+
   const handleGenerate = async () => {
     if (!croppedImage) {
       setError("Please upload and crop a photo first.");
+      return;
+    }
+    if (!email || !email.includes("@")) {
+      setError("Please enter a valid email address.");
       return;
     }
     if (photoScore && photoScore.score < 30) {
       const confirmed = window.confirm("This photo scored low for 3D generation. Try anyway?");
       if (!confirmed) return;
     }
-    setStage("generating");
+
+    setSubmitting(true);
     setError(null);
-    setProgress(0);
-    let msgIdx = 0;
-    const msgInterval = setInterval(() => {
-      msgIdx = (msgIdx + 1) % FUN_MESSAGES.length;
-      setLoadingMsg(FUN_MESSAGES[msgIdx]);
-    }, 3000);
 
     try {
-      // Step 1: Start the task (fast — returns task ID)
       const formData = new FormData();
       formData.append("image", croppedImage);
-      const startRes = await fetch("/api/generate", { method: "POST", body: formData });
-      const startData = await startRes.json();
+      formData.append("email", email);
+      const res = await fetch("/api/generate", { method: "POST", body: formData });
+      const data = await res.json();
 
-      if (startData.error) {
-        clearInterval(msgInterval);
-        setError(startData.error);
-        setStage("upload");
+      if (data.error) {
+        setError(data.error);
+        setSubmitting(false);
         return;
       }
 
-      if (startData.demo) {
-        clearInterval(msgInterval);
-        setModelUrl("demo");
-        setStage("preview");
-        return;
-      }
-
-      const taskId = startData.taskId;
-
-      // Step 2: Poll from the client (no server timeout issue)
-      const poll = async (): Promise<boolean> => {
-        try {
-          const res = await fetch(`/api/generate?taskId=${taskId}`);
-          const data = await res.json();
-          setProgress(data.progress || 0);
-
-          if (data.status === "SUCCEEDED" && data.modelUrl) {
-            setModelUrl(data.modelUrl);
-            setStage("preview");
-            return true;
-          }
-          if (data.status === "FAILED") {
-            setError(data.error || "3D generation failed. Try a different photo.");
-            setStage("upload");
-            return true;
-          }
-          return false; // still in progress
-        } catch {
-          return false; // network blip, keep polling
-        }
-      };
-
-      // Poll every 5 seconds for up to 10 minutes
-      for (let i = 0; i < 120; i++) {
-        const done = await poll();
-        if (done) {
-          clearInterval(msgInterval);
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 5000));
-      }
-
-      // Timed out after 10 min
-      clearInterval(msgInterval);
-      setError("Generation is taking longer than expected. Please try again with a simpler photo.");
-      setStage("upload");
+      setTaskId(data.taskId || "demo");
+      setSubmittedEmail(email);
+      setEmailSent(false);
+      setStage("submitted");
+      setSubmitting(false);
     } catch {
-      clearInterval(msgInterval);
       setError("Something went wrong. Please try again.");
-      setStage("upload");
+      setSubmitting(false);
     }
   };
 
-  const handleRegenerate = () => {
-    if (regenerateCount >= 2) return;
-    setRegenerateCount((c) => c + 1);
-    handleGenerate();
-  };
-
-  const handleReupload = () => {
-    if (reuploadCount >= 2) return;
-    setReuploadCount((c) => c + 1);
+  const handleStartOver = () => {
     setRawFile(null);
     setRawPreview(null);
     setCroppedImage(null);
     setPhotoScore(null);
-    setModelUrl(null);
+    setEmail("");
+    setTaskId(null);
+    setSubmittedEmail("");
+    setEmailSent(false);
+    setError(null);
     setStage("upload");
-  };
-
-  const exhausted = regenerateCount >= 2 && reuploadCount >= 2;
-
-  const handleCheckout = () => {
-    if (modelUrl) localStorage.setItem("petcast_model", modelUrl);
-    window.location.href = "/checkout";
   };
 
   return (
@@ -452,6 +416,21 @@ export default function CreatePage() {
             )}
           </div>
 
+          {/* Email input */}
+          {croppedImage && (
+            <div className="bg-white rounded-2xl p-6 shadow-md mb-6">
+              <h3 className="font-semibold mb-2" style={{ fontFamily: "Fredoka" }}>📧 Where should we send your 3D bust?</h3>
+              <p className="text-sm text-[var(--color-soft-gray)] mb-3">We&apos;ll email you when your model is ready (usually 3-5 minutes).</p>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="your@email.com"
+                className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 text-lg focus:border-[var(--color-amber-accent)] focus:outline-none transition-colors"
+              />
+            </div>
+          )}
+
           {/* Tips */}
           <div className="bg-amber-50 rounded-2xl p-6 mb-6">
             <h3 className="font-semibold mb-3" style={{ fontFamily: "Fredoka" }}>📋 Tips for the Best Results</h3>
@@ -468,83 +447,68 @@ export default function CreatePage() {
 
           <button
             onClick={handleGenerate}
-            disabled={!croppedImage}
+            disabled={!croppedImage || !email || submitting}
             className="w-full bg-[var(--color-amber-accent)] hover:bg-[var(--color-amber-dark)] disabled:opacity-40 text-white font-semibold py-4 rounded-full text-lg transition-all"
           >
-            Generate 3D Bust 🎨
+            {submitting ? "Starting..." : "Generate 3D Bust 🎨"}
           </button>
         </div>
       )}
 
-      {/* Generating stage */}
-      {stage === "generating" && (
-        <div className="text-center py-20">
-          <div className="text-6xl mb-6 animate-bounce">🎨</div>
-          <p className="text-xl font-semibold mb-2" style={{ fontFamily: "Fredoka" }}>{loadingMsg}</p>
-          <p className="text-sm text-[var(--color-soft-gray)]">This can take 2-5 minutes — hang tight!</p>
-          <div className="mt-8 w-64 mx-auto">
-            <div className="h-3 bg-amber-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-[var(--color-amber-accent)] rounded-full transition-all duration-1000"
-                style={{ width: `${Math.max(progress, 5)}%` }}
-              />
-            </div>
-            <p className="text-xs text-gray-400 mt-2">{progress}% complete</p>
-          </div>
-        </div>
-      )}
+      {/* Submitted stage — immediate confirmation */}
+      {stage === "submitted" && (
+        <div className="text-center py-12">
+          <div className="bg-white rounded-2xl p-8 shadow-md max-w-lg mx-auto">
+            <div className="text-6xl mb-6">🎉</div>
+            <h2 className="text-2xl font-bold mb-3" style={{ fontFamily: "Fredoka" }}>We&apos;re on it!</h2>
+            <p className="text-lg text-[var(--color-soft-gray)] mb-2">
+              We&apos;re sculpting your pet&apos;s 3D bust right now.
+            </p>
+            <p className="text-[var(--color-soft-gray)] mb-6">
+              You&apos;ll get an email at <span className="font-semibold text-[var(--color-charcoal)]">{submittedEmail}</span> when it&apos;s ready (usually 3-5 minutes). Check your inbox! 🐾
+            </p>
 
-      {/* Preview stage */}
-      {stage === "preview" && (
-        <div>
-          <div className="bg-white rounded-2xl p-6 shadow-md mb-6">
-            <div className="aspect-square rounded-xl overflow-hidden bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
-              {modelUrl && modelUrl !== "demo" && modelUrl.startsWith("http") ? (
-                <div className="w-full h-full" dangerouslySetInnerHTML={{
-                  __html: `<model-viewer src="${modelUrl}" auto-rotate camera-controls touch-action="pan-y" style="width:100%;height:100%" exposure="1" shadow-intensity="1" environment-image="neutral" ar></model-viewer>`
-                }} />
-              ) : (
-                <div className="text-center p-8">
-                  <div className="text-8xl mb-4">🗿</div>
-                  <p className="font-semibold text-lg" style={{ fontFamily: "Fredoka" }}>Your Pet&apos;s 3D Bust</p>
-                  <p className="text-sm text-[var(--color-soft-gray)] mt-2">Demo mode — connect Meshy API for real 3D models</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <button onClick={handleCheckout} className="w-full bg-[var(--color-amber-accent)] hover:bg-[var(--color-amber-dark)] text-white font-semibold py-4 rounded-full text-lg transition-all">
-              Love It! Proceed to Checkout 🛒
-            </button>
-
-            {!exhausted ? (
-              <div className="flex gap-3">
-                {regenerateCount < 2 && (
-                  <button onClick={handleRegenerate} className="flex-1 border-2 border-[var(--color-amber-accent)] text-[var(--color-amber-accent)] font-semibold py-3 rounded-full hover:bg-amber-50 transition-colors">
-                    🔄 Regenerate ({2 - regenerateCount} left)
-                  </button>
-                )}
-                {reuploadCount < 2 && (
-                  <button onClick={handleReupload} className="flex-1 border-2 border-[var(--color-soft-gray)] text-[var(--color-soft-gray)] font-semibold py-3 rounded-full hover:bg-gray-50 transition-colors">
-                    📸 New Photos ({2 - reuploadCount} left)
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="text-center bg-amber-50 rounded-2xl p-6">
-                <p className="font-semibold mb-2" style={{ fontFamily: "Fredoka" }}>Not quite right? Our artists can help! 🎨</p>
-                <p className="text-sm text-[var(--color-soft-gray)] mb-4">A human sculptor will review your photos and work with you directly.</p>
-                <a href="/contact" className="inline-block bg-[var(--color-charcoal)] text-white font-semibold px-6 py-3 rounded-full hover:opacity-90 transition-opacity">
-                  Contact Our Team
-                </a>
+            {emailSent && (
+              <div className="bg-green-50 rounded-xl p-4 mb-6">
+                <p className="text-green-700 font-semibold">✅ Your 3D bust is ready! Check your email or view it now.</p>
               </div>
             )}
+
+            <div className="bg-amber-50 rounded-xl p-4 mb-6">
+              <p className="text-sm text-[var(--color-soft-gray)] mb-2">Bookmark this link to check your model anytime:</p>
+              <a
+                href={`/view?id=${taskId}`}
+                className="text-[var(--color-amber-accent)] font-semibold hover:underline break-all"
+              >
+                {typeof window !== "undefined" ? window.location.origin : ""}/view?id={taskId}
+              </a>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <a
+                href={`/view?id=${taskId}`}
+                className="w-full inline-block bg-[var(--color-amber-accent)] hover:bg-[var(--color-amber-dark)] text-white font-semibold py-4 rounded-full text-lg transition-all text-center"
+              >
+                View My 3D Bust 👀
+              </a>
+              <button
+                onClick={handleStartOver}
+                className="w-full border-2 border-gray-300 text-[var(--color-soft-gray)] font-semibold py-3 rounded-full hover:bg-gray-50 transition-colors"
+              >
+                Create Another 📸
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* model-viewer loaded via layout.tsx */}
+      {/* Preview stage — kept for direct model viewing from old flow, redirect to /view */}
+      {stage === "preview" && taskId && (
+        <div className="text-center py-20">
+          <p>Redirecting...</p>
+          <script dangerouslySetInnerHTML={{ __html: `window.location.href="/view?id=${taskId}";` }} />
+        </div>
+      )}
     </div>
   );
 }
