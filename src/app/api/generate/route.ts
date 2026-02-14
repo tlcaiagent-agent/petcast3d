@@ -3,50 +3,21 @@ import { NextResponse } from "next/server";
 const MESHY_API_KEY = process.env.MESHY_API_KEY;
 const MESHY_BASE = "https://api.meshy.ai/openapi/v1";
 
-async function pollTask(taskId: string): Promise<{ modelUrl: string | null; error?: string }> {
-  for (let i = 0; i < 120; i++) {
-    await new Promise((r) => setTimeout(r, 5000));
-    const res = await fetch(`${MESHY_BASE}/image-to-3d/${taskId}`, {
-      headers: { Authorization: `Bearer ${MESHY_API_KEY}` },
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      console.error("Poll error:", res.status, text);
-      continue;
-    }
-    const data = await res.json();
-    console.log("Poll status:", data.status, "progress:", data.progress);
-    if (data.status === "SUCCEEDED") {
-      const glb = data.model_urls?.glb || data.model_urls?.obj;
-      return { modelUrl: glb || null };
-    }
-    if (data.status === "FAILED") {
-      return { modelUrl: null, error: data.task_error?.message || "3D generation failed" };
-    }
-  }
-  return { modelUrl: null, error: "Timed out waiting for 3D model" };
-}
-
+// POST: Start a new generation task (returns task ID immediately)
 export async function POST(request: Request) {
   try {
-    // Demo mode if no API key
     if (!MESHY_API_KEY) {
       await new Promise((r) => setTimeout(r, 2000));
-      return NextResponse.json({
-        modelUrl: "demo",
-        demo: true,
-        message: "Demo mode — no Meshy API key configured",
-      });
+      return NextResponse.json({ taskId: "demo", demo: true });
     }
 
     const formData = await request.formData();
     const imageData = formData.get("image") as string | null;
-    
+
     if (!imageData) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
 
-    // imageData is already a base64 data URL from the client (after crop)
     const createRes = await fetch(`${MESHY_BASE}/image-to-3d`, {
       method: "POST",
       headers: {
@@ -61,7 +32,7 @@ export async function POST(request: Request) {
 
     const createData = await createRes.json();
     console.log("Meshy create response:", JSON.stringify(createData));
-    
+
     if (!createRes.ok || !createData.result) {
       return NextResponse.json(
         { error: createData.message || createData.error || "Failed to create 3D task" },
@@ -69,12 +40,71 @@ export async function POST(request: Request) {
       );
     }
 
-    // Poll for completion
-    const result = await pollTask(createData.result);
-    return NextResponse.json(result);
+    // Return the task ID immediately — client will poll /api/generate?taskId=xxx
+    return NextResponse.json({ taskId: createData.result });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("Generate error:", msg);
     return NextResponse.json({ error: `Server error: ${msg}` }, { status: 500 });
+  }
+}
+
+// GET: Poll task status (client calls this every few seconds)
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const taskId = searchParams.get("taskId");
+
+    if (!taskId) {
+      return NextResponse.json({ error: "Missing taskId" }, { status: 400 });
+    }
+
+    if (taskId === "demo") {
+      return NextResponse.json({
+        status: "SUCCEEDED",
+        modelUrl: "demo",
+        demo: true,
+        progress: 100,
+      });
+    }
+
+    if (!MESHY_API_KEY) {
+      return NextResponse.json({ error: "No API key" }, { status: 500 });
+    }
+
+    const res = await fetch(`${MESHY_BASE}/image-to-3d/${taskId}`, {
+      headers: { Authorization: `Bearer ${MESHY_API_KEY}` },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Poll error:", res.status, text);
+      return NextResponse.json({ status: "POLLING", progress: 0, message: "Checking..." });
+    }
+
+    const data = await res.json();
+    console.log("Poll:", data.status, "progress:", data.progress);
+
+    if (data.status === "SUCCEEDED") {
+      const glb = data.model_urls?.glb || data.model_urls?.obj;
+      return NextResponse.json({ status: "SUCCEEDED", modelUrl: glb || null, progress: 100 });
+    }
+
+    if (data.status === "FAILED") {
+      return NextResponse.json({
+        status: "FAILED",
+        error: data.task_error?.message || "3D generation failed",
+      });
+    }
+
+    // Still in progress
+    return NextResponse.json({
+      status: "IN_PROGRESS",
+      progress: data.progress || 0,
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("Poll error:", msg);
+    return NextResponse.json({ status: "POLLING", progress: 0, message: "Retrying..." });
   }
 }

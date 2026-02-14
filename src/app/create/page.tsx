@@ -210,6 +210,7 @@ export default function CreatePage() {
   const [photoScore, setPhotoScore] = useState<PhotoScore | null>(null);
   const [scoring, setScoring] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState(FUN_MESSAGES[0]);
+  const [progress, setProgress] = useState(0);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [regenerateCount, setRegenerateCount] = useState(0);
   const [reuploadCount, setReuploadCount] = useState(0);
@@ -258,27 +259,75 @@ export default function CreatePage() {
     }
     setStage("generating");
     setError(null);
+    setProgress(0);
     let msgIdx = 0;
-    const interval = setInterval(() => {
+    const msgInterval = setInterval(() => {
       msgIdx = (msgIdx + 1) % FUN_MESSAGES.length;
       setLoadingMsg(FUN_MESSAGES[msgIdx]);
     }, 3000);
 
     try {
+      // Step 1: Start the task (fast — returns task ID)
       const formData = new FormData();
       formData.append("image", croppedImage);
-      const res = await fetch("/api/generate", { method: "POST", body: formData });
-      const data = await res.json();
-      clearInterval(interval);
-      if (data.modelUrl) {
-        setModelUrl(data.modelUrl);
-        setStage("preview");
-      } else {
-        setError(data.error || "Generation failed. Please try again.");
+      const startRes = await fetch("/api/generate", { method: "POST", body: formData });
+      const startData = await startRes.json();
+
+      if (startData.error) {
+        clearInterval(msgInterval);
+        setError(startData.error);
         setStage("upload");
+        return;
       }
+
+      if (startData.demo) {
+        clearInterval(msgInterval);
+        setModelUrl("demo");
+        setStage("preview");
+        return;
+      }
+
+      const taskId = startData.taskId;
+
+      // Step 2: Poll from the client (no server timeout issue)
+      const poll = async (): Promise<boolean> => {
+        try {
+          const res = await fetch(`/api/generate?taskId=${taskId}`);
+          const data = await res.json();
+          setProgress(data.progress || 0);
+
+          if (data.status === "SUCCEEDED" && data.modelUrl) {
+            setModelUrl(data.modelUrl);
+            setStage("preview");
+            return true;
+          }
+          if (data.status === "FAILED") {
+            setError(data.error || "3D generation failed. Try a different photo.");
+            setStage("upload");
+            return true;
+          }
+          return false; // still in progress
+        } catch {
+          return false; // network blip, keep polling
+        }
+      };
+
+      // Poll every 5 seconds for up to 10 minutes
+      for (let i = 0; i < 120; i++) {
+        const done = await poll();
+        if (done) {
+          clearInterval(msgInterval);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+
+      // Timed out after 10 min
+      clearInterval(msgInterval);
+      setError("Generation is taking longer than expected. Please try again with a simpler photo.");
+      setStage("upload");
     } catch {
-      clearInterval(interval);
+      clearInterval(msgInterval);
       setError("Something went wrong. Please try again.");
       setStage("upload");
     }
@@ -432,9 +481,15 @@ export default function CreatePage() {
         <div className="text-center py-20">
           <div className="text-6xl mb-6 animate-bounce">🎨</div>
           <p className="text-xl font-semibold mb-2" style={{ fontFamily: "Fredoka" }}>{loadingMsg}</p>
-          <p className="text-sm text-[var(--color-soft-gray)]">This can take 1-3 minutes — hang tight!</p>
-          <div className="mt-8 w-64 mx-auto h-2 bg-amber-100 rounded-full overflow-hidden">
-            <div className="h-full bg-[var(--color-amber-accent)] rounded-full animate-pulse" style={{ width: "70%" }} />
+          <p className="text-sm text-[var(--color-soft-gray)]">This can take 2-5 minutes — hang tight!</p>
+          <div className="mt-8 w-64 mx-auto">
+            <div className="h-3 bg-amber-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-[var(--color-amber-accent)] rounded-full transition-all duration-1000"
+                style={{ width: `${Math.max(progress, 5)}%` }}
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-2">{progress}% complete</p>
           </div>
         </div>
       )}
