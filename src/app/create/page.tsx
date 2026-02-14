@@ -499,19 +499,15 @@ export default function CreatePage() {
         <div>
           <div className="bg-white rounded-2xl p-6 shadow-md mb-6">
             <div className="aspect-square rounded-xl overflow-hidden bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
-              {modelUrl && modelUrl.endsWith(".glb") ? (
+              {modelUrl && modelUrl !== "demo" && modelUrl.startsWith("http") ? (
                 <div className="w-full h-full" dangerouslySetInnerHTML={{
-                  __html: `<model-viewer src="${modelUrl}" auto-rotate camera-controls touch-action="pan-y" style="width:100%;height:100%" exposure="1" shadow-intensity="1" environment-image="neutral"></model-viewer>`
+                  __html: `<model-viewer src="${modelUrl}" auto-rotate camera-controls touch-action="pan-y" style="width:100%;height:100%" exposure="1" shadow-intensity="1" environment-image="neutral" ar></model-viewer>`
                 }} />
               ) : (
                 <div className="text-center p-8">
                   <div className="text-8xl mb-4">🗿</div>
                   <p className="font-semibold text-lg" style={{ fontFamily: "Fredoka" }}>Your Pet&apos;s 3D Bust</p>
-                  {modelUrl === "demo" ? (
-                    <p className="text-sm text-[var(--color-soft-gray)] mt-2">Demo mode — connect Meshy API for real 3D models</p>
-                  ) : (
-                    <p className="text-sm text-[var(--color-soft-gray)] mt-2">3D model generated! Rotate • Zoom • Pan</p>
-                  )}
+                  <p className="text-sm text-[var(--color-soft-gray)] mt-2">Demo mode — connect Meshy API for real 3D models</p>
                 </div>
               )}
             </div>
@@ -548,8 +544,7 @@ export default function CreatePage() {
         </div>
       )}
 
-      {/* model-viewer script */}
-      <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
+      {/* model-viewer loaded via layout.tsx */}
     </div>
   );
 }
