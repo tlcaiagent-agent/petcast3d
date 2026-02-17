@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     const viewUrl = `${getBaseUrl(request)}/view?id=${taskId}`;
 
     const { error } = await resend.emails.send({
-      from: "PetCast 3D <noreply@petcast3d.com>",
+      from: "PetCast 3D <onboarding@resend.dev>",
       to: email,
       subject: "Your pet's 3D bust is ready! 🐾",
       html: buildEmailHtml(viewUrl, thumbnailUrl),
