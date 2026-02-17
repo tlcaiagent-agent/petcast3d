@@ -103,9 +103,29 @@ function ViewContent() {
       <div className="bg-white rounded-2xl p-6 shadow-md mb-6">
         <div className="aspect-square rounded-xl overflow-hidden bg-gradient-to-br from-amber-50 to-orange-50 flex items-center justify-center">
           {task.modelUrl && task.modelUrl !== "demo" && task.modelUrl.startsWith("http") ? (
-            <div className="w-full h-full" dangerouslySetInnerHTML={{
-              __html: `<model-viewer src="${task.modelUrl}" auto-rotate camera-controls touch-action="pan-y" style="width:100%;height:100%" exposure="1" shadow-intensity="1" environment-image="neutral" ar></model-viewer>`
-            }} />
+            <div className="w-full h-full relative">
+              <div className="w-full h-full" dangerouslySetInnerHTML={{
+                __html: `<model-viewer
+                  src="${task.modelUrl}"
+                  auto-rotate
+                  camera-controls
+                  touch-action="pan-y"
+                  style="width:100%;height:100%"
+                  exposure="1"
+                  shadow-intensity="1"
+                  environment-image="neutral"
+                  ar
+                  loading="eager"
+                  reveal="auto"
+                >
+                  <div slot="progress-bar" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#fffbeb,#fff7ed);">
+                    <div style="font-size:3rem;margin-bottom:1rem;animation:pulse 2s infinite">🐾</div>
+                    <p style="font-weight:600;font-size:0.875rem;color:#6b7280;">Loading 3D model...</p>
+                    <p style="font-size:0.75rem;color:#9ca3af;margin-top:0.25rem;">Large file — may take 30-60 seconds</p>
+                  </div>
+                </model-viewer>`
+              }} />
+            </div>
           ) : (
             <div className="text-center p-8">
               <div className="text-8xl mb-4">🗿</div>
