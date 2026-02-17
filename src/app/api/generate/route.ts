@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     // Store job with image data so we can retry if Meshy fails
     const jobId = result.taskId;
     jobs.set(jobId, {
-      email,
+      email: email || "",
       imageData,
       meshyTaskId: result.taskId,
       retries: 0,
