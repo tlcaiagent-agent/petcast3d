@@ -111,9 +111,10 @@ function ViewContent() {
                   camera-controls
                   touch-action="pan-y"
                   style="width:100%;height:100%"
-                  exposure="1"
-                  shadow-intensity="1"
+                  exposure="1.2"
+                  shadow-intensity="1.5"
                   environment-image="neutral"
+                  skybox-height="0"
                   ar
                   loading="eager"
                   reveal="auto"
