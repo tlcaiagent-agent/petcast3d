@@ -21,7 +21,12 @@ async function submitToMeshy(imageData: string): Promise<{ taskId?: string; erro
       Authorization: `Bearer ${MESHY_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ image_url: imageData, enable_pbr: true }),
+    body: JSON.stringify({
+      image_url: imageData,
+      enable_pbr: true,
+      topology: "triangle",
+      target_polycount: 10000,
+    }),
   });
   const createData = await createRes.json();
   console.log("Meshy create response:", JSON.stringify(createData));

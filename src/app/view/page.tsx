@@ -106,7 +106,7 @@ function ViewContent() {
             <div className="w-full h-full relative">
               <div className="w-full h-full" dangerouslySetInnerHTML={{
                 __html: `<model-viewer
-                  src="${task.modelUrl}"
+                  src="/api/model?url=${encodeURIComponent(task.modelUrl)}"
                   auto-rotate
                   camera-controls
                   touch-action="pan-y"
