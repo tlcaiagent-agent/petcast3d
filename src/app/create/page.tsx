@@ -197,7 +197,7 @@ export default function CreatePage() {
   const [submittedEmail, setSubmittedEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [emailSent, setEmailSent] = useState(false);
+  // emailSent removed — email is now optional
 
   const handleFile = useCallback((file: File) => {
     setRawFile(file);
@@ -230,11 +230,16 @@ export default function CreatePage() {
     img.src = dataUrl;
   }, [rawFile]);
 
-  // Background polling + email notification
+  const [progress, setProgress] = useState(0);
+  const [modelReady, setModelReady] = useState(false);
+  const [genFailed, setGenFailed] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
+
+  // Background polling
   useEffect(() => {
-    if (!taskId || stage !== "submitted" || emailSent) return;
+    if (!taskId || stage !== "submitted" || modelReady || genFailed) return;
     if (taskId === "demo") {
-      setEmailSent(true);
+      setModelReady(true);
       return;
     }
 
@@ -242,40 +247,39 @@ export default function CreatePage() {
       try {
         const res = await fetch(`/api/generate?taskId=${taskId}`);
         const data = await res.json();
+        if (data.progress) setProgress(data.progress);
+        if (data.message) setStatusMsg(data.message);
         if (data.status === "SUCCEEDED" && data.modelUrl) {
           clearInterval(interval);
-          // Send email notification
-          try {
-            await fetch("/api/notify", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                email: submittedEmail,
-                taskId,
-                modelUrl: data.modelUrl,
-              }),
-            });
-          } catch { /* best effort */ }
-          setEmailSent(true);
+          setModelReady(true);
+          setProgress(100);
+          // Best-effort email if provided
+          if (submittedEmail && submittedEmail !== "none") {
+            try {
+              await fetch("/api/notify", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: submittedEmail, taskId, modelUrl: data.modelUrl }),
+              });
+            } catch { /* best effort */ }
+          }
         }
         if (data.status === "FAILED") {
           clearInterval(interval);
+          setGenFailed(true);
         }
       } catch { /* network blip, keep polling */ }
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [taskId, stage, submittedEmail, emailSent]);
+  }, [taskId, stage, submittedEmail, modelReady, genFailed]);
 
   const handleGenerate = async () => {
     if (!croppedImage) {
       setError("Please upload and crop a photo first.");
       return;
     }
-    if (!email || !email.includes("@")) {
-      setError("Please enter a valid email address.");
-      return;
-    }
+    // Email is optional now
     if (photoScore && photoScore.score < 30) {
       const confirmed = window.confirm("This photo scored low for 3D generation. Try anyway?");
       if (!confirmed) return;
@@ -287,7 +291,7 @@ export default function CreatePage() {
     try {
       const formData = new FormData();
       formData.append("image", croppedImage);
-      formData.append("email", email);
+      formData.append("email", email || "none");
       const res = await fetch("/api/generate", { method: "POST", body: formData });
       const data = await res.json();
 
@@ -299,7 +303,9 @@ export default function CreatePage() {
 
       setTaskId(data.taskId || "demo");
       setSubmittedEmail(email);
-      setEmailSent(false);
+      setModelReady(false);
+      setGenFailed(false);
+      setProgress(0);
       setStage("submitted");
       setSubmitting(false);
     } catch {
@@ -316,7 +322,9 @@ export default function CreatePage() {
     setEmail("");
     setTaskId(null);
     setSubmittedEmail("");
-    setEmailSent(false);
+    setModelReady(false);
+    setGenFailed(false);
+    setProgress(0);
     setError(null);
     setStage("upload");
   };
@@ -416,16 +424,16 @@ export default function CreatePage() {
             )}
           </div>
 
-          {/* Email input */}
+          {/* Email input (optional) */}
           {croppedImage && (
             <div className="bg-white rounded-2xl p-6 shadow-md mb-6">
-              <h3 className="font-semibold mb-2" style={{ fontFamily: "Fredoka" }}>📧 Where should we send your 3D bust?</h3>
-              <p className="text-sm text-[var(--color-soft-gray)] mb-3">We&apos;ll email you when your model is ready (usually 3-5 minutes).</p>
+              <h3 className="font-semibold mb-2" style={{ fontFamily: "Fredoka" }}>📧 Get notified when it&apos;s ready (optional)</h3>
+              <p className="text-sm text-[var(--color-soft-gray)] mb-3">Leave your email to get a link when your bust is done, or just wait on the next page.</p>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
+                placeholder="your@email.com (optional)"
                 className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 text-lg focus:border-[var(--color-amber-accent)] focus:outline-none transition-colors"
               />
             </div>
@@ -447,7 +455,7 @@ export default function CreatePage() {
 
           <button
             onClick={handleGenerate}
-            disabled={!croppedImage || !email || submitting}
+            disabled={!croppedImage || submitting}
             className="w-full bg-[var(--color-amber-accent)] hover:bg-[var(--color-amber-dark)] disabled:opacity-40 text-white font-semibold py-4 rounded-full text-lg transition-all"
           >
             {submitting ? "Starting..." : "Generate 3D Bust 🎨"}
@@ -455,47 +463,61 @@ export default function CreatePage() {
         </div>
       )}
 
-      {/* Submitted stage — immediate confirmation */}
+      {/* Submitted stage — live progress */}
       {stage === "submitted" && (
         <div className="text-center py-12">
           <div className="bg-white rounded-2xl p-8 shadow-md max-w-lg mx-auto">
-            <div className="text-6xl mb-6">🎉</div>
-            <h2 className="text-2xl font-bold mb-3" style={{ fontFamily: "Fredoka" }}>We&apos;re on it!</h2>
-            <p className="text-lg text-[var(--color-soft-gray)] mb-2">
-              We&apos;re sculpting your pet&apos;s 3D bust right now.
-            </p>
-            <p className="text-[var(--color-soft-gray)] mb-6">
-              You&apos;ll get an email at <span className="font-semibold text-[var(--color-charcoal)]">{submittedEmail}</span> when it&apos;s ready (usually 3-5 minutes). Check your inbox! 🐾
-            </p>
-
-            {emailSent && (
-              <div className="bg-green-50 rounded-xl p-4 mb-6">
-                <p className="text-green-700 font-semibold">✅ Your 3D bust is ready! Check your email or view it now.</p>
-              </div>
+            {!modelReady && !genFailed && (
+              <>
+                <div className="text-6xl mb-6 animate-bounce">🎨</div>
+                <h2 className="text-2xl font-bold mb-3" style={{ fontFamily: "Fredoka" }}>Sculpting your pet...</h2>
+                <p className="text-[var(--color-soft-gray)] mb-4">
+                  {statusMsg || "Our AI sculptor is working its magic. This usually takes 3-5 minutes."}
+                </p>
+                <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
+                  <div
+                    className="h-full bg-[var(--color-amber-accent)] rounded-full transition-all duration-500"
+                    style={{ width: `${Math.max(progress, 5)}%` }}
+                  />
+                </div>
+                <p className="text-sm text-[var(--color-soft-gray)]">{progress}% complete</p>
+              </>
             )}
 
-            <div className="bg-amber-50 rounded-xl p-4 mb-6">
-              <p className="text-sm text-[var(--color-soft-gray)] mb-2">Bookmark this link to check your model anytime:</p>
-              <a
-                href={`/view?id=${taskId}`}
-                className="text-[var(--color-amber-accent)] font-semibold hover:underline break-all"
-              >
-                {typeof window !== "undefined" ? window.location.origin : ""}/view?id={taskId}
-              </a>
-            </div>
+            {modelReady && (
+              <>
+                <div className="text-6xl mb-6">🎉</div>
+                <h2 className="text-2xl font-bold mb-3" style={{ fontFamily: "Fredoka" }}>Your 3D bust is ready!</h2>
+                <p className="text-[var(--color-soft-gray)] mb-6">
+                  Click below to view and interact with your pet&apos;s 3D sculpture 🐾
+                </p>
+              </>
+            )}
+
+            {genFailed && (
+              <>
+                <div className="text-6xl mb-6">😿</div>
+                <h2 className="text-2xl font-bold mb-3" style={{ fontFamily: "Fredoka" }}>Generation failed</h2>
+                <p className="text-[var(--color-soft-gray)] mb-6">
+                  Something went wrong with the 3D generation. Please try again with another photo.
+                </p>
+              </>
+            )}
 
             <div className="flex flex-col gap-3">
-              <a
-                href={`/view?id=${taskId}`}
-                className="w-full inline-block bg-[var(--color-amber-accent)] hover:bg-[var(--color-amber-dark)] text-white font-semibold py-4 rounded-full text-lg transition-all text-center"
-              >
-                View My 3D Bust 👀
-              </a>
+              {modelReady && (
+                <a
+                  href={`/view?id=${taskId}`}
+                  className="w-full inline-block bg-[var(--color-amber-accent)] hover:bg-[var(--color-amber-dark)] text-white font-semibold py-4 rounded-full text-lg transition-all text-center"
+                >
+                  View My 3D Bust 👀
+                </a>
+              )}
               <button
                 onClick={handleStartOver}
                 className="w-full border-2 border-gray-300 text-[var(--color-soft-gray)] font-semibold py-3 rounded-full hover:bg-gray-50 transition-colors"
               >
-                Create Another 📸
+                {genFailed ? "Try Again 📸" : "Create Another 📸"}
               </button>
             </div>
           </div>

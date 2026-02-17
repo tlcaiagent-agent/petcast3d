@@ -46,9 +46,7 @@ export async function POST(request: Request) {
     if (!imageData) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
-    if (!email) {
-      return NextResponse.json({ error: "Email is required" }, { status: 400 });
-    }
+    // Email is optional
 
     // Submit to Meshy
     const result = await submitToMeshy(imageData);
